@@ -1,0 +1,91 @@
+>:
+	> "Storage Engine Architecture"
+	>> []
+
+"Storage Engine Architecture":
+	"quote": "Specification Version: 1.4.0"
+	"quote": "Status: Draft"
+	"quote": "Author: Systems Engineering Group"
+	"paragraph": "An overview of the core storage subsystem, covering ingestion pipelines, cache layout, and disk persistence mechanisms."
+	"horizontal-line": true
+	> ["1. Overview", "2. Memory Subsystem", "3. Persistence Layer", "4. Query Engine", "5. External Dependencies"]
+	>> []
+
+"1. Overview":
+	"paragraph": "The storage engine provides an append-only log-structured interface for high-throughput stream ingestion. It decouples in-memory staging from persistent disk packing."
+	"list-item": "Core invariant: Zero uncommitted dirty reads across thread boundaries."
+	"list-item": "See [Memory Subsystem](#2-memory-subsystem) for working set layouts."
+	"list-item": "Refer to [Persistence Layer](#3-persistence-layer) for compaction routines."
+	"horizontal-line": true
+	> []
+	>> ["2. Memory Subsystem", "3. Persistence Layer"]
+
+"2. Memory Subsystem":
+	"paragraph": "The memory layer holds hot records and handles real-time concurrency."
+	> ["2.1 MemTable", "2.2 Block Cache"]
+	>> []
+
+"3. Persistence Layer":
+	"paragraph": "Coordinates durable storage, recovery guarantees, and space reclamation."
+	> ["3.1 SSTable Segment", "3.2 Write-Ahead Log (WAL)"]
+	>> []
+
+"4. Query Engine":
+	"paragraph": "Executes point lookups and range scans across active memory tables and cold SSTable files."
+	"list-item": "First checks [MemTable](#21-memtable)."
+	"list-item": "Falls back to [Block Cache](#22-block-cache)."
+	"list-item": "Issues vectorized prefetch queries to [SSTable Segment](#31-sstable-segment)."
+	"code-block": """toml
+[query_planner]
+max_parallel_scans = 16
+bloom_filter_bits_per_key = 10
+enable_direct_io = true
+"""
+	"horizontal-line": true
+	> []
+	>> []
+
+"5. External Dependencies":
+	"list-item": "External type catalog: `../specs/types.sfgn`"
+	"list-item": "Global hardware profile: `../hardware/topology.sfgn`"
+	> []
+	>> [< "../specs/types.sfgn" >, < "../hardware/topology.sfgn" >]
+
+"2.1 MemTable":
+	"paragraph": "The active write target. Incoming writes append to an in-memory skip-list backed by an unsegmented arena."
+	"list-item": "**Capacity**: 64 MB before triggering a flush."
+	"list-item": "**Relations**: Flushes directly to [SSTable Segment](#31-sstable-segment) and logs mutations to [Write-Ahead Log](#32-write-ahead-log-wal)."
+	"code-block": """rust
+pub struct MemTable {
+    arena_id: u32,
+    byte_size: usize,
+    sealed: bool,
+}
+"""
+	> []
+	>> []
+
+"2.2 Block Cache":
+	"paragraph": "A flat, cache-conscious LRU pool storing uncompressed 4 KB pages."
+	"list-item": "**Lookup Latency**: Target $< 500\text{ ns}$."
+	"list-item": "**Eviction**: Clock-sweep algorithm over contiguous cache lines."
+	"list-item": "**Relations**: Consulted by [Query Engine](#4-query-engine) before issuing disk I/O."
+	"horizontal-line": true
+	> []
+	>> ["4. Query Engine"]
+
+"3.1 SSTable Segment":
+	"paragraph": "Immutable sorted string tables written sequentially to disk during flush sweeps."
+	"list-item": "Contains fixed-width sparse index headers."
+	"list-item": "References external dictionary: `../shared/dictionary.sfgn`."
+	"list-item": "Relates to [Block Cache](#22-block-cache) on cache misses."
+	> []
+	>> [< "../shared/dictionary.sfgn" >, "2.2 Block Cache"]
+
+"3.2 Write-Ahead Log (WAL)":
+	"paragraph": "Sequential, synchronous append-only disk log written before updating the [MemTable](#21-memtable)."
+	"list-item": "**Sync Mode**: Periodic `fdatasync` batching every 2 ms."
+	"list-item": "**Failure Mode**: Replayed on boot to reconstruct volatile state."
+	"horizontal-line": true
+	> []
+	>> ["2.1 MemTable"]
